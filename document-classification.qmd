@@ -1,6 +1,6 @@
 ---
 title: "Document Classification"
-author: "Desiree Thomas, Kiera Griffiths"
+author: "Desiree Thomas, Kiera Griffiths, Denise Atherley"
 format: html
 editor: visual
 ---
