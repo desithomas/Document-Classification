@@ -12,3 +12,41 @@ The task for this assignment is to create a classification system to identify wh
 We will include a cleaning phase to ensure that the model focuses on the content of the email, rather than the formatting or "noise". One of the main points of this step is to reduce the risk of overfitting our model while training. For this to work and allow the model to "read" through the emails, we cannot use just any data format or file type; vectorization will need to occur as the model will need to have the now cleaned text as a Document-Term Matrix. The model we will use for this assignment has preliminarily been assigned as Naive Bayes; though depending on the baseline we may experiment with a Support Vector Machine (as suggested by Gemini) or even Random Forest.
 
 Lastly, we will run an evaluation to determine where our model is either failing or experiencing bottlenecks; for this we will determine both the models precision and recall. Potential pitfalls include an imbalanced class which is sometimes caused by a model "guessing" ham frequently - this may lead to an inflated accuracy score. We may also encounter encoding errors and will need to remain aware of tokenization, sparsity management, and spam specific filtering for points such as subjects and the senders domain, which the model may pinpoint as spam instead of the message content. To extend this further, we may try this against web-pages that were scraped and tagged, to compare classification against the web pages and emails.
+
+
+## Load in libraries 
+```{r}
+library(tidyverse)
+library(tidytext)
+library(tm)
+```
+
+```{r}
+#Ingestion 
+
+read_corpus <- function(directory, class_label) {
+  files <- list.files(directory, full.names =  TRUE)
+  
+  #map_df with encoding to prevent UTF-8 errors 
+  df <- map_df(files, ~tibble(
+    text = read_file(.x, locale = locale(encoding = "latin1")), 
+    label = class_label, 
+    file_name = basename(.x) 
+  ))
+  return(df)
+}
+
+```
+
+
+## Internal question: Reproducibility
+```{r}
+#Paths are based on working directory; adjust for your own working directory
+ham_data <- read_corpus("data/raw/easy_ham", "ham")
+spam_data <- read_corpus("data/raw/spam", "spam")
+
+#Combine and create a document ID 
+email_corpus <- bind_rows(ham_data, spam_data) %>% 
+  mutate(doc_id = row_number())
+
+```
