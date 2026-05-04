@@ -1,14 +1,144 @@
 ---
 title: "Document Classification"
-author: "Desiree Thomas, Kiera Griffiths, Denise Atherley"
+author: "Desiree Thomas, Denise Atherley"
 format: html
 editor: visual
 ---
 
-## Approach
+## Introduction
 
-The task for this assignment is to create a classification system to identify whether an email that was received is spam or "ham" (not spam). Our approach to start will be to import the SpamAssassin corpus into our environment; we will attempt reproducibility during this section. The functions we have identified as likely to be utilized will iterate through the directories as they read each text file and before we store it in a dataframe. We will use read_file() from the readr package instead of readLines() as it is prone to encoding errors due to unknown characters (which spam often uses to bypass spam filters). An additional function we expect to use is map_df() from the purrr package.
+Almost everyone who has likely received a spam email (whether in the spam folder or in their Inbox) or had a legitimate email flagged as spam, where it was banished to the Spam Folder. In my own personal experience, Outlook has consistently targeted my NYC Comic Con verification as spam, while allowing fake job offers to enter my inbox. It can be very frustrating to users. In this assignment, we attempted document classification, where we were given spam and ham test documents from the spamassassin corpus. The goal for this assignment was to train a model to recognize the emails as either spam or ham. Please note that due to having to download, unzip and store the test documents, there was no way for us to have a RAW GitHub url that available for use. When running this file, please alter the file paths to match your own. Here is the url for the test documemts corpus: https://spamassassin.apache.org/old/publiccorpus/
 
-We will include a cleaning phase to ensure that the model focuses on the content of the email, rather than the formatting or "noise". One of the main points of this step is to reduce the risk of overfitting our model while training. For this to work and allow the model to "read" through the emails, we cannot use just any data format or file type; vectorization will need to occur as the model will need to have the now cleaned text as a Document-Term Matrix. The model we will use for this assignment has preliminarily been assigned as Naive Bayes; though depending on the baseline we may experiment with a Support Vector Machine (as suggested by Gemini) or even Random Forest.
 
-Lastly, we will run an evaluation to determine where our model is either failing or experiencing bottlenecks; for this we will determine both the models precision and recall. Potential pitfalls include an imbalanced class which is sometimes caused by a model "guessing" ham frequently - this may lead to an inflated accuracy score. We may also encounter encoding errors and will need to remain aware of tokenization, sparsity management, and spam specific filtering for points such as subjects and the senders domain, which the model may pinpoint as spam instead of the message content. To extend this further, we may try this against web-pages that were scraped and tagged, to compare classification against the web pages and emails.
+
+## Load in libraries 
+```{r}
+library(tidyverse)
+library(tidytext)
+library(tm)
+library(e1071)
+library(caret)
+```
+
+```{r}
+#Ingestion 
+
+read_corpus <- function(directory, class_label) {
+  files <- list.files(directory, full.names =  TRUE)
+  
+  #map_df with encoding to prevent UTF-8 errors 
+  df <- map_df(files, ~tibble(
+    text = read_file(.x, locale = locale(encoding = "latin1")), 
+    label = class_label, 
+    file_name = basename(.x) 
+  ))
+  return(df)
+}
+
+```
+
+
+IMPORTANT: Alter file paths to match your own for reproducibility.
+```{r}
+#Paths are based on working directory; adjust for your own working directory
+ham_data <- read_corpus("/Users/dthom/Desktop/Data_607/document-classification/Document-Classification/project4/data/raw/easy_ham", "ham")
+spam_data <- read_corpus("/Users/dthom/Desktop/Data_607/document-classification/Document-Classification/project4/data/raw/spam", "spam")
+
+#Combine and create a document ID 
+email_corpus <- bind_rows(ham_data, spam_data) %>% 
+  mutate(doc_id = row_number())
+
+```
+
+
+## Cleaning and vectorization
+
+In this chunk, we used this as our cleaning phase to remove noise and vectorization to create the DTM. The tidytext package was very helpful for this portion. Here, we tokenized and cleaned by breaking the text into words and removed standard stop words. 
+```{r}
+# Force R to load the stop words dataframe due to error in previous iteration
+data("stop_words", package = "tidytext")
+
+# Runs the pipeline responsible for cleaning
+tidy_emails <- email_corpus %>%
+  unnest_tokens(word, text) %>%
+  anti_join(tidytext::stop_words, by = "word") %>%
+  filter(!stringr::str_detect(word, "^[0-9]+$")) %>%
+  filter(nchar(word) > 2)
+```
+
+This counts the words per document and casts it to the matrix that our modeling algorithm needs. 
+```{r}
+#Creates the DTM
+email_dtm <- tidy_emails %>%
+  count(doc_id, word) %>%
+  cast_dtm(doc_id, word, n)
+
+#Keeps words that appear in at least 1% of emails 
+email_dtm_reduced <- tm::removeSparseTerms(email_dtm, 0.99)
+
+#Converts to a dataframe that the algorithm can actually read
+dtm_df <- as.data.frame(as.matrix(email_dtm_reduced))
+
+#Adds the spam and ham labels to the new matrix
+dtm_df$label <- email_corpus$label[match(rownames(dtm_df), email_corpus$doc_id)]
+dtm_df$label <- as.factor(dtm_df$label)
+```
+
+# Training and evaluation 
+ 
+We used 80% of our emails to train the model and the other 20% were used to test the model. We used the Naive Bayes as our model of choice and caret was used for the Confusion Matrix. We set a seed, to help aid reproducibility.
+
+```{r}
+
+# Creates a function that converts any number > 0 to "Yes", and 0 to "No"
+convert_counts <- function(x) {
+  factor(ifelse(x > 0, "Yes", "No"))
+}
+
+# Identifies all columns EXCEPT the 'label' column
+cols_to_convert <- setdiff(names(dtm_df), "label")
+
+# Applies the function to the word columns to overwrite the numbers with Yes/No
+dtm_df[cols_to_convert] <- lapply(dtm_df[cols_to_convert], convert_counts)
+
+```
+
+
+```{r}
+set.seed(42) #this is our seed 
+train_index <- sample(1:nrow(dtm_df), 0.8 * nrow(dtm_df))
+train_data <- dtm_df[train_index, ]
+test_data <- dtm_df[-train_index, ]
+
+
+```
+
+#Model Training
+
+```{r}
+nb_model <- naiveBayes(label ~ ., data = train_data) #There may be some lag here depending on your machine
+#this is using the 20% that was withheld from the model make predictions
+predictions <- predict(nb_model, test_data)
+
+#Evaluate
+confusionMatrix(predictions, test_data$label)
+
+```
+In the first iteration, the model predicted 951 false negatives; it predicted 951 "ham" emails as "spam". This may have been due to the naiveBayes() function being given a dataframe that had a lot of numerical term counts such as "free" a number of times. The algorithm most likely then assumed that the words that came afterward was following a normal distribution. This led the model to try to fit the bell curve to a matrix that had mostly 0's inside of it, which then wrecked the variance, which in turn led the model to put everything into the "spam" section. 
+
+We asked Gemini and it suggested that we use the Bernoulli Naive Bayes. The change was made due to Naive Bayes needing categorical data and not continuous data. The model should be tracking if words are appearing or not, not just the frequency of their appearance. To deal with this, we decided to then enter a conversion step right before we split the data and set the seed. 
+
+After making this change, our Accuracy jumped from 24% to 97% as well as the Kappa score becoming statistically significant. 1019 real emails made it through and only 1 spam email tricked the model, this is the predicted ham. The spam folder actually caught 215 spam emails, though it did accidentally flag 26 of the real emails as spam, this is the predicted ham. 
+
+## Conclusion
+
+Our final model ended up being a Bernoulli Naive Bayes classifier after we saw the accuracy reported after our first run. We converted to this classifier because we needed to convert the raw word counts into categorical "yes and no" factors to handle the sparse matrix correctly. Our model's final accuracy score was 97.86% with only 1 spam email bypassing the filter. The pipeline also ingested the 2003 corpus (I started with only a few to prove that the pipeline worked before I scaled and added the rest of the corpus). 
+
+## Future Iterations 
+Due to debugging time, the original plan to experiment with a Support Vector Machine and scraping web pages has been postponed to a future iteration to ensure that the deliverable is...delivered... on time. 
+
+#Citations 
+Gemini was used to both provide terminal commands to avoid using the GUI when extracting and making directories, alongside providing debugging support. It also provided an explanation on why the accuracy score was so low and suggested the Bernoulli alternative.
+
+Google DeepMind. (2026). Gemini 3.1 Pro [Large Language model].
+https://gemini.google.com. Accessed May 03, 2026
