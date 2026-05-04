@@ -149,3 +149,5 @@ conf_mat(predictions, truth = label, estimate = .pred_class) %>%
 ## Conclusion
 
 This project successfully implemented an end-to-end classification system to differentiate between "spam" and "ham" emails using the SpamAssassin public corpus. By utilizing a functional, tidy pipeline in R, we achieved strict reproducibility and a robust architecture capable of handling the inherent messiness of raw email data.
+
+Google DeepMind. (2026). Gemini 3.1 Pro [Large Language model]. https://gemini.google.com. Accessed May 03, 2026
