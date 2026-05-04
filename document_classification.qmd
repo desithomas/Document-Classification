@@ -1,0 +1,151 @@
+---
+title: "Document Classification"
+author: "Desiree Thomas, Kiera Griffiths, Denise Atherley"
+format: html
+editor: visual
+---
+
+## Approach
+
+The task for this assignment is to create a classification system to identify whether an email that was received is spam or "ham" (not spam). Our approach to start will be to import the SpamAssassin corpus into our environment; we will attempt reproducibility during this section. The functions we have identified as likely to be utilized will iterate through the directories as they read each text file and before we store it in a dataframe. We will use read_file() from the readr package instead of readLines() as it is prone to encoding errors due to unknown characters (which spam often uses to bypass spam filters). An additional function we expect to use is map_df() from the purrr package.
+
+We will include a cleaning phase to ensure that the model focuses on the content of the email, rather than the formatting or "noise". One of the main points of this step is to reduce the risk of overfitting our model while training. For this to work and allow the model to "read" through the emails, we cannot use just any data format or file type; vectorization will need to occur as the model will need to have the now cleaned text as a Document-Term Matrix. The model we will use for this assignment has preliminarily been assigned as Naive Bayes; though depending on the baseline we may experiment with a Support Vector Machine (as suggested by Gemini) or even Random Forest.
+
+Lastly, we will run an evaluation to determine where our model is either failing or experiencing bottlenecks; for this we will determine both the models precision and recall. Potential pitfalls include an imbalanced class which is sometimes caused by a model "guessing" ham frequently - this may lead to an inflated accuracy score. We may also encounter encoding errors and will need to remain aware of tokenization, sparsity management, and spam specific filtering for points such as subjects and the senders domain, which the model may pinpoint as spam instead of the message content. To extend this further, we may try this against web-pages that were scraped and tagged, to compare classification against the web pages and emails.
+
+## Case Base
+
+```{r}
+# Load essential libraries
+library(tidyverse)   # For dplyr, purrr, readr
+library(tidymodels)  # For modeling pipeline and evaluation
+library(textrecipes) # For text-specific preprocessing steps
+library(discrim)     # For Naive Bayes model engine
+library(naivebayes)  # Underlying engine for Naive Bayes
+```
+
+### Data Ingestion
+
+```{r}
+# Create a directory to hold the raw data if it doesn't exist
+if(!dir.exists("data")) dir.create("data")
+
+# 1. Define the URLs for the spam and ham datasets
+# We are using the 20030228 versions as a standard baseline
+spam_url <- "https://spamassassin.apache.org/old/publiccorpus/20030228_spam.tar.bz2"
+ham_url  <- "https://spamassassin.apache.org/old/publiccorpus/20030228_easy_ham.tar.bz2"
+
+# 2. Define the local destination paths for the compressed files
+spam_tar <- "data/spam.tar.bz2"
+ham_tar  <- "data/ham.tar.bz2"
+
+# 3. Download the files (this may take a moment depending on connection)
+if(!file.exists(spam_tar)) download.file(spam_url, destfile = spam_tar)
+if(!file.exists(ham_tar))  download.file(ham_url, destfile = ham_tar)
+
+# 4. Extract the archives into the "data" folder
+# Base R's untar() handles .tar.bz2 files on most modern OS setups
+untar(spam_tar, exdir = "data")
+untar(ham_tar, exdir = "data")
+
+# Optional: Clean up the compressed files to save space
+# file.remove(spam_tar, ham_tar)
+```
+
+```{r}
+# The ingestion function
+process_corpus <- function(path, label) {
+  list.files(path, full.names = TRUE) %>%
+    map_df(~tibble(
+      text = read_file(.x, locale = locale(encoding = "latin1")),
+      label = label,
+      file_source = basename(.x)
+    ))
+}
+
+# 1. Read the extracted directories
+# Note: The extraction process creates folders named exactly "spam" and "easy_ham"
+spam_df <- process_corpus("data/spam", "spam")
+ham_df  <- process_corpus("data/easy_ham", "ham")
+
+# 2. Bind them together and format the label column
+full_corpus <- bind_rows(spam_df, ham_df) %>%
+  mutate(label = factor(label, levels = c("ham", "spam")))
+
+# 3. Verify the import
+glimpse(full_corpus)
+table(full_corpus$label)
+```
+
+### Data Splitting and Resampling
+
+```{r}
+# Set a seed for reproducibility (as requested in your approach)
+set.seed(123)
+
+# Stratified split ensures the proportion of spam/ham remains balanced
+# in both the training and testing sets.
+data_split <- initial_split(full_corpus, strata = label, prop = 0.8)
+train_data <- training(data_split)
+test_data  <- testing(data_split)
+```
+
+### Cleaning and Vectorization
+
+```{r}
+# This recipe handles tokenization, sparsity, and vectorization (DTM).
+# Doing this inside a recipe prevents data leakage from the test set.
+text_recipe <- recipe(label ~ text, data = train_data) %>%
+  step_tokenize(text) %>%
+  # Remove standard stop words (noise reduction)
+  step_stopwords(text) %>%
+  # Filter out rare words to manage sparsity and prevent overfitting
+  step_tokenfilter(text, max_tokens = 1000) %>%
+  # Term Frequency-Inverse Document Frequency (Vectorization)
+  # This serves the function of your Document-Term Matrix
+  step_tfidf(text)
+```
+
+### Model Specification & Workflow
+
+```{r}
+# Specify a Naive Bayes model (can be swapped easily to SVM or Random Forest later)
+nb_spec <- naive_Bayes() %>%
+  set_mode("classification") %>%
+  set_engine("naivebayes")
+
+# Bundle the recipe and the model into a single functional workflow
+spam_workflow <- workflow() %>%
+  add_recipe(text_recipe) %>%
+  add_model(nb_spec)
+```
+
+### Training & Evaluation
+
+```{r}
+install.packages("stopwords")
+```
+
+```{r}
+# Train the model on the training data
+nb_fit <- spam_workflow %>%
+  fit(data = train_data)
+
+# Predict on the withheld test data
+predictions <- predict(nb_fit, new_data = test_data) %>%
+  bind_cols(test_data)
+
+# Calculate Accuracy, Precision, and Recall
+custom_metrics <- metric_set(accuracy, precision, recall)
+model_performance <- custom_metrics(predictions, truth = label, estimate = .pred_class)
+
+print(model_performance)
+
+# Generate a Confusion Matrix to visualize bottlenecks (false positives/negatives)
+conf_mat(predictions, truth = label, estimate = .pred_class) %>%
+  autoplot(type = "heatmap")
+```
+
+## Conclusion
+
+This project successfully implemented an end-to-end classification system to differentiate between "spam" and "ham" emails using the SpamAssassin public corpus. By utilizing a functional, tidy pipeline in R, we achieved strict reproducibility and a robust architecture capable of handling the inherent messiness of raw email data.
